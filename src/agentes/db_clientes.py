@@ -9,22 +9,23 @@ import os
 import json
 from datetime import datetime
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
-DB_PATH = os.path.join(DATA_DIR, "clientes.json")
+from src.config import get_pasta_base, get_db_path, get_pasta_clientes
 
 
 def _carregar_db() -> dict:
     """Carrega a base de clientes."""
-    if os.path.exists(DB_PATH):
-        with open(DB_PATH, "r", encoding="utf-8") as f:
+    db_path = get_db_path()
+    if os.path.exists(db_path):
+        with open(db_path, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 
 def _salvar_db(db: dict):
     """Salva a base de clientes."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with open(DB_PATH, "w", encoding="utf-8") as f:
+    db_path = get_db_path()
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    with open(db_path, "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
 
 
@@ -133,7 +134,7 @@ def excluir_cliente(client_id: str):
     _salvar_db(db)
 
     # Remover pasta de dados
-    pasta = os.path.join(DATA_DIR, "clientes", client_id)
+    pasta = os.path.join(get_pasta_clientes(), client_id)
     if os.path.isdir(pasta):
         shutil.rmtree(pasta)
 
@@ -160,8 +161,8 @@ def renomear_cliente(client_id_antigo: str, novo_nome: str) -> str:
     _salvar_db(db)
 
     # Renomear pasta
-    pasta_antiga = os.path.join(DATA_DIR, "clientes", client_id_antigo)
-    pasta_nova = os.path.join(DATA_DIR, "clientes", novo_id)
+    pasta_antiga = os.path.join(get_pasta_clientes(), client_id_antigo)
+    pasta_nova = os.path.join(get_pasta_clientes(), novo_id)
     if os.path.isdir(pasta_antiga) and not os.path.exists(pasta_nova):
         os.rename(pasta_antiga, pasta_nova)
 
@@ -173,7 +174,7 @@ def migrar_clientes_existentes():
     Migra clientes que existem só como pasta para a base clientes.json.
     Chamado na inicialização do app.
     """
-    pasta_clientes = os.path.join(DATA_DIR, "clientes")
+    pasta_clientes = get_pasta_clientes()
     if not os.path.isdir(pasta_clientes):
         return
 

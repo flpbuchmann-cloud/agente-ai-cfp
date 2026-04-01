@@ -17,8 +17,7 @@ from src.agentes.leitor_documentos import (
     formatar_documentos_para_prompt,
 )
 
-# Diretório base de dados dos clientes
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "clientes")
+from src.config import get_pasta_clientes
 
 # ---------------------------------------------------------------------------
 # Provedores de IA
@@ -179,7 +178,7 @@ def chamar_ia(
 
 def pasta_cliente(nome_cliente: str) -> str:
     """Retorna o caminho da pasta do cliente."""
-    return os.path.join(DATA_DIR, nome_cliente)
+    return os.path.join(get_pasta_clientes(), nome_cliente)
 
 
 def pasta_agente(nome_cliente: str, agente_id: str) -> str:
@@ -275,11 +274,12 @@ def formatar_info_qualitativa(info: dict) -> str:
 
 def listar_clientes() -> list[str]:
     """Lista todos os clientes cadastrados."""
-    if not os.path.isdir(DATA_DIR):
+    pasta = get_pasta_clientes()
+    if not os.path.isdir(pasta):
         return []
     return sorted([
-        d for d in os.listdir(DATA_DIR)
-        if os.path.isdir(os.path.join(DATA_DIR, d))
+        d for d in os.listdir(pasta)
+        if os.path.isdir(os.path.join(pasta, d))
     ])
 
 

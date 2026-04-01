@@ -36,6 +36,7 @@ from src.agentes.db_clientes import (
     renomear_cliente as db_renomear_cliente,
     migrar_clientes_existentes,
 )
+from src.config import get_pasta_base, set_pasta_base, get_pasta_clientes
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -120,11 +121,38 @@ def sidebar():
 
         st.markdown("---")
 
-        # Modelo
+        # Configurações
         st.markdown("### ⚙️ Configurações")
         modelos = PROVEDORES[provedor]["modelos"]
         modelo = st.selectbox("Modelo", modelos, index=0)
         st.session_state["modelo"] = modelo
+
+        # Pasta de dados
+        with st.expander("📂 Pasta de dados"):
+            pasta_atual = get_pasta_base()
+            st.caption(f"Atual: `{pasta_atual}`")
+            nova_pasta = st.text_input(
+                "Pasta base (Google Drive ou local)",
+                value=pasta_atual,
+                key="cfg_pasta_base",
+                help="Todos os cadastros e documentos serão salvos aqui. "
+                     "Use uma pasta do Google Drive para sincronização automática.",
+            )
+            if st.button("Salvar pasta", key="btn_salvar_pasta"):
+                if nova_pasta.strip() and os.path.isdir(nova_pasta.strip()):
+                    set_pasta_base(nova_pasta.strip())
+                    st.success(f"Pasta atualizada!")
+                    st.rerun()
+                elif nova_pasta.strip():
+                    try:
+                        os.makedirs(nova_pasta.strip(), exist_ok=True)
+                        set_pasta_base(nova_pasta.strip())
+                        st.success(f"Pasta criada e configurada!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao criar pasta: {e}")
+                else:
+                    st.warning("Informe um caminho válido.")
 
         st.markdown("---")
 
