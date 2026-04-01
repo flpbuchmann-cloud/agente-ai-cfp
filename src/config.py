@@ -13,9 +13,9 @@ _CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "config.json"
 )
 
-# Pasta padrão dentro do projeto (fallback)
+# Pasta padrão: "clientes/" na raiz do projeto
 _DEFAULT_DATA_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "data"
+    os.path.dirname(os.path.abspath(__file__)), ".."
 )
 
 
