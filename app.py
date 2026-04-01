@@ -130,13 +130,20 @@ def sidebar():
 
         # Navegação
         st.markdown("### 📍 Navegação")
-        tela = st.radio(
-            "Ir para:",
-            ["🏠 Painel de Clientes", "👤 Ficha do Cliente"],
+        opcoes_tela = ["🏠 Painel de Clientes", "👤 Ficha do Cliente"]
+        tela_atual = st.session_state.get("tela", opcoes_tela[0])
+        idx_atual = opcoes_tela.index(tela_atual) if tela_atual in opcoes_tela else 0
+
+        def _on_nav_change():
+            st.session_state["tela"] = st.session_state["nav_tela"]
+
+        st.radio(
+            "Ir para:", opcoes_tela,
+            index=idx_atual,
             key="nav_tela",
             label_visibility="collapsed",
+            on_change=_on_nav_change,
         )
-        st.session_state["tela"] = tela
 
         # Resumo do cliente ativo
         cid = st.session_state.get("cliente_ativo")
