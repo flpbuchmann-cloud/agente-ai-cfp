@@ -1,9 +1,6 @@
 """
 Agente AI - CFP: Planejamento Financeiro Pessoal com Agentes de IA
 
-Streamlit app que coordena múltiplos agentes especialistas de IA para
-produzir uma análise financeira completa da vida de um cliente.
-
 Usage:
     streamlit run app.py
 """
@@ -14,27 +11,30 @@ import json
 
 import streamlit as st
 
-# Adicionar raiz do projeto ao path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.prompts.agentes import AGENTES
 from src.agentes.engine import (
     criar_estrutura_cliente,
-    carregar_info_qualitativa,
-    salvar_info_qualitativa,
-    listar_clientes,
     listar_documentos_agente,
     salvar_documento,
     importar_de_pasta,
     pasta_agente,
     executar_agente_especialista,
     executar_master,
-    executar_pipeline_completo,
     pasta_cliente,
-    excluir_cliente,
-    renomear_cliente,
     PROVEDORES,
+)
+from src.agentes.db_clientes import (
+    listar_clientes as db_listar_clientes,
+    ids_clientes,
+    obter_cliente,
+    salvar_cliente,
+    criar_cliente,
+    excluir_cliente as db_excluir_cliente,
+    renomear_cliente as db_renomear_cliente,
+    migrar_clientes_existentes,
 )
 
 # ---------------------------------------------------------------------------
@@ -47,52 +47,45 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# CSS
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1a1a2e;
-        margin-bottom: 0.5rem;
-    }
-    .sub-header {
-        font-size: 1rem;
-        color: #666;
-        margin-bottom: 2rem;
-    }
-    .agent-card {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 1rem;
-        margin-bottom: 0.5rem;
-        border-left: 4px solid #667eea;
-    }
-    .doc-count {
-        background: #667eea;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 0.8rem;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 8px 16px;
+    .main-header { font-size: 2rem; font-weight: 700; color: #1a1a2e; margin-bottom: 0.5rem; }
+    .sub-header { font-size: 1rem; color: #666; margin-bottom: 2rem; }
+    .client-card {
+        background: #f8f9fa; border-radius: 10px; padding: 1rem;
+        margin-bottom: 0.5rem; border-left: 4px solid #667eea;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# Migrar clientes antigos (só pastas) para a base
+migrar_clientes_existentes()
+
 
 # ---------------------------------------------------------------------------
-# SIDEBAR - Gestão de Clientes
+# Helpers
+# ---------------------------------------------------------------------------
+def _k(base: str) -> str:
+    """Gera widget key com prefixo do cliente ativo para evitar conflito."""
+    cid = st.session_state.get("cliente_ativo", "none")
+    return f"{cid}__{base}"
+
+
+def _limpar_estado_cliente():
+    """Remove dados de sessão do cliente anterior ao trocar."""
+    keys_to_remove = [k for k in st.session_state if k.startswith("relatorio_")]
+    keys_to_remove += [k for k in st.session_state if k == "parecer_master"]
+    for k in keys_to_remove:
+        del st.session_state[k]
+
+
+# ---------------------------------------------------------------------------
+# SIDEBAR
 # ---------------------------------------------------------------------------
 def sidebar():
     with st.sidebar:
         st.markdown("### 🧠 Agente AI - CFP")
         st.caption("Planejamento Financeiro com IA")
-
         st.markdown("---")
 
         # Provedor de IA
@@ -105,452 +98,472 @@ def sidebar():
         )
         st.session_state["provedor"] = provedor
 
-        # API Keys
         if provedor == "claude":
             api_key = st.text_input(
-                "Anthropic API Key",
-                type="password",
+                "Anthropic API Key", type="password",
                 value=os.environ.get("ANTHROPIC_API_KEY", ""),
-                help="Necessária para usar Claude",
             )
             if api_key:
                 os.environ["ANTHROPIC_API_KEY"] = api_key
         else:
             api_key = st.text_input(
-                "Google Gemini API Key",
-                type="password",
+                "Google Gemini API Key", type="password",
                 value=os.environ.get("GEMINI_API_KEY", ""),
-                help="Necessária para usar Gemini",
             )
             if api_key:
                 os.environ["GEMINI_API_KEY"] = api_key
-
-            # Gem personalizado
             gem_id = st.text_input(
-                "Gem ID (opcional)",
-                value=st.session_state.get("gem_id", ""),
-                help="ID de um Gem personalizado do Gemini. "
-                     "Ex: tunedModels/meu-gem-abc123. "
-                     "Deixe vazio para usar o modelo padrão.",
+                "Gem ID (opcional)", value=st.session_state.get("gem_id", ""),
                 placeholder="tunedModels/...",
             )
-            st.session_state["gem_id"] = gem_id if gem_id.strip() else None
-
-        st.markdown("---")
-
-        # Seleção de cliente
-        st.markdown("### 👤 Cliente")
-        clientes = listar_clientes()
-
-        if clientes:
-            cliente_sel = st.selectbox(
-                "Selecionar cliente",
-                clientes,
-                key="sel_cliente",
-            )
-            st.session_state["cliente_ativo"] = cliente_sel
-        else:
-            st.info("Nenhum cliente cadastrado.")
-            st.session_state["cliente_ativo"] = None
-
-        # Novo cliente
-        with st.expander("➕ Novo Cliente", expanded=not clientes):
-            novo_nome = st.text_input("Nome do cliente", key="novo_cliente_nome")
-            if st.button("Criar", key="btn_criar_cliente"):
-                if novo_nome.strip():
-                    criar_estrutura_cliente(novo_nome.strip())
-                    st.session_state["cliente_ativo"] = novo_nome.strip()
-                    st.success(f"Cliente '{novo_nome.strip()}' criado!")
-                    st.rerun()
-                else:
-                    st.warning("Informe o nome do cliente.")
-
-        # Gerenciar cliente (renomear / excluir)
-        if clientes and st.session_state.get("cliente_ativo"):
-            with st.expander("✏️ Gerenciar Cliente"):
-                cliente_ativo = st.session_state["cliente_ativo"]
-
-                # Renomear
-                novo_nome_ren = st.text_input(
-                    "Renomear para:",
-                    value=cliente_ativo,
-                    key="renomear_nome",
-                )
-                if st.button("Renomear", key="btn_renomear"):
-                    novo = novo_nome_ren.strip()
-                    if novo and novo != cliente_ativo:
-                        if novo in clientes:
-                            st.error(f"Já existe um cliente '{novo}'.")
-                        else:
-                            renomear_cliente(cliente_ativo, novo)
-                            st.session_state["cliente_ativo"] = novo
-                            st.success(f"Renomeado para '{novo}'!")
-                            st.rerun()
-                    else:
-                        st.warning("Informe um nome diferente do atual.")
-
-                st.markdown("---")
-
-                # Excluir
-                st.markdown("**Excluir cliente**")
-                st.caption(
-                    f"Isso removerá permanentemente todos os dados, "
-                    f"documentos e relatórios de **{cliente_ativo}**."
-                )
-                confirma = st.text_input(
-                    f'Digite "{cliente_ativo}" para confirmar:',
-                    key="confirma_exclusao",
-                )
-                if st.button("🗑️ Excluir", key="btn_excluir", type="primary"):
-                    if confirma == cliente_ativo:
-                        excluir_cliente(cliente_ativo)
-                        st.session_state["cliente_ativo"] = None
-                        st.success(f"Cliente '{cliente_ativo}' excluído.")
-                        st.rerun()
-                    else:
-                        st.error("Nome não confere. Exclusão cancelada.")
+            st.session_state["gem_id"] = gem_id.strip() if gem_id.strip() else None
 
         st.markdown("---")
 
         # Modelo
         st.markdown("### ⚙️ Configurações")
-        provedor_atual = st.session_state.get("provedor", "claude")
-        modelos_disponiveis = PROVEDORES[provedor_atual]["modelos"]
-        modelo = st.selectbox(
-            "Modelo",
-            modelos_disponiveis,
-            index=0,
-            help="Selecione o modelo do provedor escolhido.",
-        )
+        modelos = PROVEDORES[provedor]["modelos"]
+        modelo = st.selectbox("Modelo", modelos, index=0)
         st.session_state["modelo"] = modelo
 
-        # Info do cliente ativo
-        cliente = st.session_state.get("cliente_ativo")
-        if cliente:
+        st.markdown("---")
+
+        # Navegação
+        st.markdown("### 📍 Navegação")
+        tela = st.radio(
+            "Ir para:",
+            ["🏠 Painel de Clientes", "👤 Ficha do Cliente"],
+            key="nav_tela",
+            label_visibility="collapsed",
+        )
+        st.session_state["tela"] = tela
+
+        # Resumo do cliente ativo
+        cid = st.session_state.get("cliente_ativo")
+        if cid:
+            dados = obter_cliente(cid)
             st.markdown("---")
-            st.markdown(f"**Cliente ativo:** {cliente}")
-            total_docs = 0
-            for agente_id in AGENTES:
-                total_docs += len(listar_documentos_agente(cliente, agente_id))
-            st.caption(f"📄 {total_docs} documentos carregados")
+            st.markdown(f"**Cliente ativo:**  \n{dados.get('nome_completo', cid)}")
+            total_docs = sum(
+                len(listar_documentos_agente(cid, a)) for a in AGENTES
+            )
+            st.caption(f"📄 {total_docs} documentos")
 
 
 # ---------------------------------------------------------------------------
-# ABA 1: Informações Qualitativas
+# TELA 1: Painel de Clientes
 # ---------------------------------------------------------------------------
-def aba_info_qualitativa():
-    cliente = st.session_state.get("cliente_ativo")
-    if not cliente:
-        st.warning("Selecione ou crie um cliente na barra lateral.")
-        return
-
-    st.markdown("### 📋 Informações Qualitativas do Cliente")
-    st.caption(
-        "Estas informações servem como base de conhecimento para todos os agentes. "
-        "Quanto mais detalhado, melhor a análise."
+def tela_painel_clientes():
+    st.markdown('<p class="main-header">🧠 Agente AI - CFP</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="sub-header">Planejamento Financeiro Pessoal com Inteligência Artificial</p>',
+        unsafe_allow_html=True,
     )
 
-    info = carregar_info_qualitativa(cliente)
+    # Novo cliente
+    st.markdown("### ➕ Novo Cliente")
+    col_novo, col_btn = st.columns([3, 1])
+    with col_novo:
+        novo_nome = st.text_input("Nome do cliente", key="novo_cliente_nome", label_visibility="collapsed",
+                                   placeholder="Nome completo do cliente")
+    with col_btn:
+        if st.button("Criar Cliente", key="btn_criar", type="primary"):
+            if novo_nome.strip():
+                try:
+                    cid = criar_cliente(novo_nome.strip())
+                    criar_estrutura_cliente(cid)
+                    st.session_state["cliente_ativo"] = cid
+                    st.session_state["tela"] = "👤 Ficha do Cliente"
+                    st.success(f"Cliente '{novo_nome.strip()}' criado!")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
+            else:
+                st.warning("Informe o nome.")
+
+    st.markdown("---")
+
+    # Lista de clientes
+    clientes = db_listar_clientes()
+
+    if not clientes:
+        st.info("Nenhum cliente cadastrado. Crie o primeiro acima.")
+        return
+
+    st.markdown(f"### 👥 Clientes Cadastrados ({len(clientes)})")
+
+    # Busca
+    busca = st.text_input("🔍 Buscar cliente", key="busca_cliente", placeholder="Nome, CPF ou cidade...")
+    if busca:
+        busca_lower = busca.lower()
+        clientes = [c for c in clientes if
+                    busca_lower in c["nome_completo"].lower() or
+                    busca_lower in c.get("cpf", "") or
+                    busca_lower in c.get("cidade_uf", "").lower()]
+
+    # Tabela de clientes
+    for c in clientes:
+        col_info, col_acoes = st.columns([5, 2])
+
+        with col_info:
+            nome = c["nome_completo"] or c["id"]
+            cpf = f" | CPF: {c['cpf']}" if c.get("cpf") else ""
+            cidade = f" | {c['cidade_uf']}" if c.get("cidade_uf") else ""
+            profissao = f" | {c['profissao']}" if c.get("profissao") else ""
+            atualizado = f" | Atualizado: {c['atualizado_em']}" if c.get("atualizado_em") else ""
+
+            st.markdown(f"**{nome}**{cpf}{cidade}{profissao}{atualizado}")
+
+        with col_acoes:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Abrir", key=f"abrir_{c['id']}", type="primary"):
+                    _limpar_estado_cliente()
+                    st.session_state["cliente_ativo"] = c["id"]
+                    st.session_state["tela"] = "👤 Ficha do Cliente"
+                    st.rerun()
+            with col_b:
+                if st.button("🗑️", key=f"del_{c['id']}"):
+                    st.session_state["confirmar_exclusao"] = c["id"]
+                    st.rerun()
+
+        # Confirmação de exclusão
+        if st.session_state.get("confirmar_exclusao") == c["id"]:
+            st.warning(f"Tem certeza que deseja excluir **{c['nome_completo']}** e todos os seus dados?")
+            col_sim, col_nao = st.columns(2)
+            with col_sim:
+                if st.button("Sim, excluir", key=f"confirma_del_{c['id']}", type="primary"):
+                    db_excluir_cliente(c["id"])
+                    if st.session_state.get("cliente_ativo") == c["id"]:
+                        st.session_state["cliente_ativo"] = None
+                    st.session_state.pop("confirmar_exclusao", None)
+                    st.success(f"'{c['nome_completo']}' excluído.")
+                    st.rerun()
+            with col_nao:
+                if st.button("Cancelar", key=f"cancela_del_{c['id']}"):
+                    st.session_state.pop("confirmar_exclusao", None)
+                    st.rerun()
+
+        st.markdown("---")
+
+
+# ---------------------------------------------------------------------------
+# TELA 2: Ficha do Cliente (tabs)
+# ---------------------------------------------------------------------------
+def tela_ficha_cliente():
+    cid = st.session_state.get("cliente_ativo")
+    if not cid:
+        st.warning("Nenhum cliente selecionado. Volte ao Painel de Clientes.")
+        if st.button("← Voltar ao Painel"):
+            st.session_state["tela"] = "🏠 Painel de Clientes"
+            st.rerun()
+        return
+
+    dados = obter_cliente(cid)
+    nome = dados.get("nome_completo", cid)
+
+    # Header
+    col_titulo, col_voltar = st.columns([5, 1])
+    with col_titulo:
+        st.markdown(f"## 👤 {nome}")
+        if dados.get("cpf"):
+            st.caption(f"CPF: {dados['cpf']} | Cadastro: {dados.get('criado_em', '')} | Atualizado: {dados.get('atualizado_em', '')}")
+    with col_voltar:
+        if st.button("← Painel", key="btn_voltar_painel"):
+            _limpar_estado_cliente()
+            st.session_state["tela"] = "🏠 Painel de Clientes"
+            st.rerun()
+
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 Cadastro",
+        "📄 Documentos",
+        "🤖 Executar Agentes",
+        "📊 Relatórios",
+    ])
+
+    with tab1:
+        _aba_cadastro(cid)
+    with tab2:
+        _aba_documentos(cid)
+    with tab3:
+        _aba_executar(cid)
+    with tab4:
+        _aba_relatorios(cid)
+
+
+# ---------------------------------------------------------------------------
+# ABA: Cadastro
+# ---------------------------------------------------------------------------
+def _aba_cadastro(cid: str):
+    dados = obter_cliente(cid)
+
+    st.markdown("### Dados Pessoais e Objetivos")
+    st.caption("Estas informações servem como base de conhecimento para todos os agentes.")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        info["nome_completo"] = st.text_input(
-            "Nome completo", value=info.get("nome_completo", ""), key="qi_nome"
+        dados["nome_completo"] = st.text_input(
+            "Nome completo", value=dados.get("nome_completo", ""), key=_k("nome")
         )
-        info["idade"] = st.text_input(
-            "Idade", value=info.get("idade", ""), key="qi_idade"
+        dados["cpf"] = st.text_input(
+            "CPF", value=dados.get("cpf", ""), key=_k("cpf")
         )
-        info["estado_civil"] = st.selectbox(
-            "Estado civil",
-            ["", "Solteiro(a)", "Casado(a)", "Divorciado(a)", "Viúvo(a)", "União Estável"],
-            index=["", "Solteiro(a)", "Casado(a)", "Divorciado(a)", "Viúvo(a)", "União Estável"].index(
-                info.get("estado_civil", "")
-            ) if info.get("estado_civil", "") in ["", "Solteiro(a)", "Casado(a)", "Divorciado(a)", "Viúvo(a)", "União Estável"] else 0,
-            key="qi_estado_civil",
+        dados["data_nascimento"] = st.text_input(
+            "Data de nascimento", value=dados.get("data_nascimento", ""),
+            key=_k("nasc"), placeholder="DD/MM/AAAA"
         )
-        info["regime_de_bens"] = st.selectbox(
-            "Regime de bens",
-            ["", "Comunhão Parcial", "Comunhão Universal", "Separação Total", "Participação Final nos Aquestos"],
-            index=["", "Comunhão Parcial", "Comunhão Universal", "Separação Total", "Participação Final nos Aquestos"].index(
-                info.get("regime_de_bens", "")
-            ) if info.get("regime_de_bens", "") in ["", "Comunhão Parcial", "Comunhão Universal", "Separação Total", "Participação Final nos Aquestos"] else 0,
-            key="qi_regime",
+        dados["idade"] = st.text_input(
+            "Idade", value=dados.get("idade", ""), key=_k("idade")
         )
-        info["filhos"] = st.text_area(
+        opcoes_ec = ["", "Solteiro(a)", "Casado(a)", "Divorciado(a)", "Viúvo(a)", "União Estável"]
+        dados["estado_civil"] = st.selectbox(
+            "Estado civil", opcoes_ec,
+            index=opcoes_ec.index(dados.get("estado_civil", "")) if dados.get("estado_civil", "") in opcoes_ec else 0,
+            key=_k("ec"),
+        )
+        opcoes_rb = ["", "Comunhão Parcial", "Comunhão Universal", "Separação Total", "Participação Final nos Aquestos"]
+        dados["regime_de_bens"] = st.selectbox(
+            "Regime de bens", opcoes_rb,
+            index=opcoes_rb.index(dados.get("regime_de_bens", "")) if dados.get("regime_de_bens", "") in opcoes_rb else 0,
+            key=_k("rb"),
+        )
+        dados["conjuge"] = st.text_input(
+            "Cônjuge/Companheiro(a)", value=dados.get("conjuge", ""), key=_k("conj")
+        )
+        dados["filhos"] = st.text_area(
             "Filhos/Dependentes (nome, idade, situação)",
-            value=info.get("filhos", ""),
-            key="qi_filhos",
-            height=100,
+            value=dados.get("filhos", ""), key=_k("filhos"), height=100,
         )
 
     with col2:
-        info["profissao"] = st.text_input(
-            "Profissão/Atividade",
-            value=info.get("profissao", ""),
-            key="qi_profissao",
+        dados["profissao"] = st.text_input(
+            "Profissão/Atividade", value=dados.get("profissao", ""), key=_k("prof")
         )
-        info["cidade_uf"] = st.text_input(
-            "Cidade/UF",
-            value=info.get("cidade_uf", ""),
-            key="qi_cidade",
+        dados["empresa_principal"] = st.text_input(
+            "Empresa principal", value=dados.get("empresa_principal", ""), key=_k("emp")
         )
-        info["perfil_risco"] = st.selectbox(
-            "Perfil de risco",
-            ["", "Conservador", "Moderado", "Arrojado", "Agressivo"],
-            index=["", "Conservador", "Moderado", "Arrojado", "Agressivo"].index(
-                info.get("perfil_risco", "")
-            ) if info.get("perfil_risco", "") in ["", "Conservador", "Moderado", "Arrojado", "Agressivo"] else 0,
-            key="qi_perfil",
+        dados["cidade_uf"] = st.text_input(
+            "Cidade/UF", value=dados.get("cidade_uf", ""), key=_k("cidade")
         )
-        info["horizonte_temporal"] = st.text_input(
-            "Horizonte temporal (ex: aposentadoria em 15 anos)",
-            value=info.get("horizonte_temporal", ""),
-            key="qi_horizonte",
+        dados["telefone"] = st.text_input(
+            "Telefone", value=dados.get("telefone", ""), key=_k("tel")
         )
-        info["objetivos_financeiros"] = st.text_area(
-            "Objetivos financeiros",
-            value=info.get("objetivos_financeiros", ""),
-            key="qi_objetivos",
-            height=100,
+        dados["email"] = st.text_input(
+            "E-mail", value=dados.get("email", ""), key=_k("email")
+        )
+        opcoes_pr = ["", "Conservador", "Moderado", "Arrojado", "Agressivo"]
+        dados["perfil_risco"] = st.selectbox(
+            "Perfil de risco", opcoes_pr,
+            index=opcoes_pr.index(dados.get("perfil_risco", "")) if dados.get("perfil_risco", "") in opcoes_pr else 0,
+            key=_k("pr"),
+        )
+        dados["horizonte_temporal"] = st.text_input(
+            "Horizonte temporal", value=dados.get("horizonte_temporal", ""),
+            key=_k("horiz"), placeholder="Ex: aposentadoria em 15 anos"
+        )
+        dados["patrimonio_estimado"] = st.text_input(
+            "Patrimônio estimado", value=dados.get("patrimonio_estimado", ""),
+            key=_k("patrim"), placeholder="Ex: R$ 5.000.000"
+        )
+        dados["renda_mensal_estimada"] = st.text_input(
+            "Renda mensal estimada", value=dados.get("renda_mensal_estimada", ""),
+            key=_k("renda"), placeholder="Ex: R$ 50.000"
         )
 
-    info["observacoes"] = st.text_area(
-        "Observações gerais (informações extras relevantes para os agentes)",
-        value=info.get("observacoes", ""),
-        key="qi_obs",
-        height=150,
-        help="Inclua aqui qualquer contexto adicional: empresas do cliente, estruturas societárias, "
-             "situações especiais, preocupações, etc.",
+    dados["objetivos_financeiros"] = st.text_area(
+        "Objetivos financeiros",
+        value=dados.get("objetivos_financeiros", ""),
+        key=_k("obj"), height=100,
     )
 
-    if st.button("💾 Salvar informações", key="btn_salvar_info", type="primary"):
-        salvar_info_qualitativa(cliente, info)
-        st.success("Informações salvas com sucesso!")
+    dados["observacoes"] = st.text_area(
+        "Observações gerais (contexto adicional para os agentes)",
+        value=dados.get("observacoes", ""),
+        key=_k("obs"), height=150,
+        help="Empresas, estruturas societárias, situações especiais, preocupações...",
+    )
+
+    col_salvar, col_renomear = st.columns([1, 1])
+
+    with col_salvar:
+        if st.button("💾 Salvar cadastro", key=_k("btn_salvar"), type="primary"):
+            salvar_cliente(cid, dados)
+            st.success("Cadastro salvo!")
+
+    with col_renomear:
+        with st.popover("✏️ Renomear cliente"):
+            novo_nome = st.text_input("Novo nome:", value=dados.get("nome_completo", ""), key=_k("ren"))
+            if st.button("Confirmar", key=_k("btn_ren")):
+                if novo_nome.strip() and novo_nome.strip() != dados.get("nome_completo", ""):
+                    try:
+                        novo_id = db_renomear_cliente(cid, novo_nome.strip())
+                        _limpar_estado_cliente()
+                        st.session_state["cliente_ativo"] = novo_id
+                        st.success(f"Renomeado para '{novo_nome.strip()}'!")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
 
 
 # ---------------------------------------------------------------------------
-# ABA 2: Documentos (por agente)
+# ABA: Documentos
 # ---------------------------------------------------------------------------
-def aba_documentos():
-    cliente = st.session_state.get("cliente_ativo")
-    if not cliente:
-        st.warning("Selecione ou crie um cliente na barra lateral.")
-        return
-
+def _aba_documentos(cid: str):
     st.markdown("### 📄 Gestão de Documentos")
-    st.caption(
-        "Cada agente especialista tem sua própria pasta de documentos. "
-        "Faça upload ou importe de uma pasta existente."
-    )
+    st.caption("Cada agente especialista tem sua própria pasta de documentos.")
 
     for agente_id, agente in AGENTES.items():
-        docs = listar_documentos_agente(cliente, agente_id)
-        doc_count = len(docs)
+        docs = listar_documentos_agente(cid, agente_id)
 
         with st.expander(
-            f"{agente['icone']} {agente['nome']} — {doc_count} doc(s)",
+            f"{agente['icone']} {agente['nome']} — {len(docs)} doc(s)",
             expanded=False,
         ):
             st.caption(agente["descricao"])
-
-            # Documentos sugeridos
-            st.markdown("**Documentos sugeridos:**")
-            for sug in agente["documentos_sugeridos"]:
-                st.markdown(f"- {sug}")
-
+            st.markdown("**Documentos sugeridos:** " + ", ".join(agente["documentos_sugeridos"]))
             st.markdown("---")
 
             col_upload, col_pasta = st.columns(2)
 
-            # Upload de arquivos
             with col_upload:
                 st.markdown("**Upload de arquivos**")
                 uploaded = st.file_uploader(
-                    "Arraste ou selecione",
-                    accept_multiple_files=True,
-                    key=f"upload_{agente_id}",
+                    "Arraste ou selecione", accept_multiple_files=True,
+                    key=_k(f"upload_{agente_id}"),
                     type=["pdf", "docx", "xlsx", "txt", "csv", "png", "jpg", "jpeg"],
                 )
                 if uploaded:
                     for f in uploaded:
-                        salvar_documento(cliente, agente_id, f.name, f.getvalue())
+                        salvar_documento(cid, agente_id, f.name, f.getvalue())
                     st.success(f"{len(uploaded)} arquivo(s) salvo(s)!")
                     st.rerun()
 
-            # Importar de pasta
             with col_pasta:
                 st.markdown("**Importar de pasta**")
                 pasta_input = st.text_input(
-                    "Caminho da pasta",
-                    key=f"pasta_{agente_id}",
-                    placeholder="C:/Documentos/Cliente/...",
+                    "Caminho da pasta", key=_k(f"pasta_{agente_id}"),
+                    placeholder="C:/Documentos/...",
                 )
-                if st.button("Importar", key=f"btn_import_{agente_id}"):
+                if st.button("Importar", key=_k(f"btn_imp_{agente_id}")):
                     if pasta_input and os.path.isdir(pasta_input):
-                        importados = importar_de_pasta(cliente, agente_id, pasta_input)
+                        importados = importar_de_pasta(cid, agente_id, pasta_input)
                         if importados:
                             st.success(f"{len(importados)} arquivo(s) importado(s)!")
                             st.rerun()
                         else:
-                            st.warning("Nenhum arquivo encontrado na pasta.")
+                            st.warning("Nenhum arquivo encontrado.")
                     else:
                         st.error("Pasta não encontrada.")
 
-            # Lista de documentos existentes
             if docs:
                 st.markdown("**Documentos carregados:**")
                 for doc_name in docs:
                     col_doc, col_del = st.columns([5, 1])
+                    ext = os.path.splitext(doc_name)[1].lower()
+                    icon = {".pdf": "📕", ".docx": "📘", ".xlsx": "📗"}.get(ext, "📎")
                     with col_doc:
-                        ext = os.path.splitext(doc_name)[1].lower()
-                        icon = {"pdf": "📕", "docx": "📘", "xlsx": "📗", "txt": "📄"}.get(
-                            ext.lstrip("."), "📎"
-                        )
                         st.markdown(f"{icon} `{doc_name}`")
                     with col_del:
-                        if st.button("🗑️", key=f"del_{agente_id}_{doc_name}"):
-                            caminho = os.path.join(
-                                pasta_agente(cliente, agente_id), doc_name
-                            )
-                            if os.path.exists(caminho):
-                                os.remove(caminho)
-                                st.rerun()
+                        if st.button("🗑️", key=_k(f"deldoc_{agente_id}_{doc_name}")):
+                            os.remove(os.path.join(pasta_agente(cid, agente_id), doc_name))
+                            st.rerun()
 
 
 # ---------------------------------------------------------------------------
-# ABA 3: Executar Agentes
+# ABA: Executar Agentes
 # ---------------------------------------------------------------------------
-def aba_executar():
-    cliente = st.session_state.get("cliente_ativo")
-    if not cliente:
-        st.warning("Selecione ou crie um cliente na barra lateral.")
-        return
-
+def _aba_executar(cid: str):
     modelo = st.session_state.get("modelo", "claude-sonnet-4-20250514")
     provedor = st.session_state.get("provedor", "claude")
     gem_id = st.session_state.get("gem_id")
 
     st.markdown("### 🤖 Executar Agentes")
 
-    # Mostrar provedor ativo
     provedor_nome = PROVEDORES[provedor]["nome"]
     gem_label = f" | Gem: `{gem_id}`" if gem_id else ""
     st.info(f"**Provedor:** {provedor_nome} | **Modelo:** `{modelo}`{gem_label}")
 
-    st.caption(
-        "Execute agentes individualmente ou o pipeline completo. "
-        "O Agente Master consolida as análises de todos os especialistas."
-    )
-
-    # Verificar API key
     env_var = "ANTHROPIC_API_KEY" if provedor == "claude" else "GEMINI_API_KEY"
     if not os.environ.get(env_var):
         st.error(f"Configure a API Key ({env_var}) na barra lateral.")
         return
 
-    # Status dos documentos por agente
+    # Status
     st.markdown("#### Status dos Agentes")
     cols = st.columns(3)
-    agentes_com_docs = []
-
     for i, (agente_id, agente) in enumerate(AGENTES.items()):
-        docs = listar_documentos_agente(cliente, agente_id)
+        docs = listar_documentos_agente(cid, agente_id)
         with cols[i % 3]:
             status = "✅" if docs else "⚠️"
-            st.markdown(
-                f"{status} {agente['icone']} **{agente['nome']}**  \n"
-                f"📄 {len(docs)} documento(s)"
-            )
-            if docs:
-                agentes_com_docs.append(agente_id)
+            st.markdown(f"{status} {agente['icone']} **{agente['nome']}**  \n📄 {len(docs)} doc(s)")
 
     st.markdown("---")
 
-    # Execução individual
+    # Individual
     st.markdown("#### Executar Agente Individual")
     col_sel, col_exec = st.columns([3, 1])
-
     with col_sel:
         opcoes = {f"{AGENTES[a]['icone']} {AGENTES[a]['nome']}": a for a in AGENTES}
-        sel = st.selectbox("Selecionar agente", list(opcoes.keys()), key="sel_agente_exec")
+        sel = st.selectbox("Selecionar agente", list(opcoes.keys()), key=_k("sel_agente"))
         agente_sel = opcoes[sel]
-
     with col_exec:
-        st.markdown("")  # spacer
-        st.markdown("")
-        if st.button("▶️ Executar", key="btn_exec_individual", type="primary"):
+        st.markdown(""); st.markdown("")
+        if st.button("▶️ Executar", key=_k("btn_exec"), type="primary"):
             with st.spinner(f"Executando {AGENTES[agente_sel]['nome']}..."):
                 try:
                     relatorio = executar_agente_especialista(
-                        cliente, agente_sel, provedor, modelo, gem_id
+                        cid, agente_sel, provedor, modelo, gem_id
                     )
                     st.session_state[f"relatorio_{agente_sel}"] = relatorio
                     st.success(f"{AGENTES[agente_sel]['nome']} concluído!")
                 except Exception as e:
                     st.error(f"Erro: {e}")
 
-    # Mostrar relatório individual se existir
     if st.session_state.get(f"relatorio_{agente_sel}"):
         with st.expander(f"📊 Relatório: {AGENTES[agente_sel]['nome']}", expanded=True):
             st.markdown(st.session_state[f"relatorio_{agente_sel}"])
 
     st.markdown("---")
 
-    # Pipeline completo
-    st.markdown("#### 🚀 Pipeline Completo (Todos os Agentes + Master)")
-    st.caption(
-        "Executa todos os agentes especialistas e depois o Agente Master "
-        "para consolidar as análises em um parecer integrado."
-    )
-
-    # Seleção de quais agentes incluir
+    # Pipeline
+    st.markdown("#### 🚀 Pipeline Completo")
     agentes_pipeline = []
     cols_check = st.columns(3)
     for i, (agente_id, agente) in enumerate(AGENTES.items()):
         with cols_check[i % 3]:
-            checked = st.checkbox(
-                f"{agente['icone']} {agente['nome']}",
-                value=True,
-                key=f"check_{agente_id}",
-            )
-            if checked:
+            if st.checkbox(f"{agente['icone']} {agente['nome']}", value=True, key=_k(f"chk_{agente_id}")):
                 agentes_pipeline.append(agente_id)
 
-    if st.button("🚀 Executar Pipeline Completo", key="btn_pipeline", type="primary"):
+    if st.button("🚀 Executar Pipeline Completo", key=_k("btn_pipeline"), type="primary"):
         if not agentes_pipeline:
             st.warning("Selecione pelo menos um agente.")
             return
 
         progress_bar = st.progress(0)
         status_text = st.empty()
-        total_steps = len(agentes_pipeline) + 1  # +1 para o master
+        total = len(agentes_pipeline) + 1
 
         relatorios = {}
         for i, agente_id in enumerate(agentes_pipeline):
-            status_text.text(f"[{i+1}/{total_steps}] Executando {AGENTES[agente_id]['nome']}...")
-            progress_bar.progress((i) / total_steps)
-
+            status_text.text(f"[{i+1}/{total}] {AGENTES[agente_id]['nome']}...")
+            progress_bar.progress(i / total)
             try:
-                relatorio = executar_agente_especialista(
-                    cliente, agente_id, provedor, modelo, gem_id
-                )
-                relatorios[agente_id] = relatorio
-                st.session_state[f"relatorio_{agente_id}"] = relatorio
+                rel = executar_agente_especialista(cid, agente_id, provedor, modelo, gem_id)
+                relatorios[agente_id] = rel
+                st.session_state[f"relatorio_{agente_id}"] = rel
             except Exception as e:
-                st.error(f"Erro no {AGENTES[agente_id]['nome']}: {e}")
+                st.error(f"Erro: {AGENTES[agente_id]['nome']}: {e}")
                 relatorios[agente_id] = f"[ERRO: {e}]"
 
-        # Executar Master
-        status_text.text(f"[{total_steps}/{total_steps}] Agente Master consolidando...")
-        progress_bar.progress((total_steps - 1) / total_steps)
-
+        status_text.text(f"[{total}/{total}] Agente Master...")
+        progress_bar.progress((total - 1) / total)
         try:
-            parecer = executar_master(cliente, relatorios, provedor, modelo, gem_id)
+            parecer = executar_master(cid, relatorios, provedor, modelo, gem_id)
             st.session_state["parecer_master"] = parecer
         except Exception as e:
-            st.error(f"Erro no Master: {e}")
-            parecer = None
+            st.error(f"Erro Master: {e}")
 
         progress_bar.progress(1.0)
         status_text.text("Pipeline concluído!")
@@ -558,70 +571,48 @@ def aba_executar():
 
 
 # ---------------------------------------------------------------------------
-# ABA 4: Relatórios
+# ABA: Relatórios
 # ---------------------------------------------------------------------------
-def aba_relatorios():
-    cliente = st.session_state.get("cliente_ativo")
-    if not cliente:
-        st.warning("Selecione ou crie um cliente na barra lateral.")
-        return
-
+def _aba_relatorios(cid: str):
     st.markdown("### 📊 Relatórios")
 
-    # Carregar relatórios salvos em disco
-    relatorios_dir = os.path.join(pasta_cliente(cliente), "relatorios")
+    relatorios_dir = os.path.join(pasta_cliente(cid), "relatorios")
 
-    # Parecer Master
-    parecer_path = os.path.join(relatorios_dir, "parecer_master.md")
+    # Master
     parecer = st.session_state.get("parecer_master")
+    parecer_path = os.path.join(relatorios_dir, "parecer_master.md")
     if not parecer and os.path.exists(parecer_path):
         with open(parecer_path, "r", encoding="utf-8") as f:
             parecer = f.read()
 
     if parecer:
-        st.markdown("#### 🧠 Parecer Financeiro Integrado (Master)")
-        with st.expander("Ver Parecer Completo", expanded=True):
+        st.markdown("#### 🧠 Parecer Financeiro Integrado")
+        with st.expander("Ver Parecer", expanded=True):
             st.markdown(parecer)
-
-        # Botão de download
-        st.download_button(
-            label="📥 Download Parecer (Markdown)",
-            data=parecer,
-            file_name=f"parecer_{cliente}.md",
-            mime="text/markdown",
-        )
+        st.download_button("📥 Download Parecer", data=parecer,
+                           file_name=f"parecer_{cid}.md", mime="text/markdown")
         st.markdown("---")
 
-    # Relatórios dos especialistas
+    # Especialistas
     st.markdown("#### Relatórios dos Especialistas")
-
-    tem_relatorio = False
+    tem = False
     for agente_id, agente in AGENTES.items():
-        # Tentar da sessão ou do disco
-        relatorio = st.session_state.get(f"relatorio_{agente_id}")
-        if not relatorio:
+        rel = st.session_state.get(f"relatorio_{agente_id}")
+        if not rel:
             path = os.path.join(relatorios_dir, f"{agente_id}.md")
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
-                    relatorio = f.read()
-
-        if relatorio:
-            tem_relatorio = True
+                    rel = f.read()
+        if rel:
+            tem = True
             with st.expander(f"{agente['icone']} {agente['nome']}", expanded=False):
-                st.markdown(relatorio)
-                st.download_button(
-                    label=f"📥 Download",
-                    data=relatorio,
-                    file_name=f"{agente_id}_{cliente}.md",
-                    mime="text/markdown",
-                    key=f"dl_{agente_id}",
-                )
+                st.markdown(rel)
+                st.download_button(f"📥 Download", data=rel,
+                                   file_name=f"{agente_id}_{cid}.md",
+                                   mime="text/markdown", key=_k(f"dl_{agente_id}"))
 
-    if not tem_relatorio and not parecer:
-        st.info(
-            "Nenhum relatório gerado ainda. "
-            "Vá para a aba 'Executar Agentes' para gerar as análises."
-        )
+    if not tem and not parecer:
+        st.info("Nenhum relatório gerado. Vá para 'Executar Agentes'.")
 
 
 # ---------------------------------------------------------------------------
@@ -630,52 +621,12 @@ def aba_relatorios():
 def main():
     sidebar()
 
-    cliente = st.session_state.get("cliente_ativo")
+    tela = st.session_state.get("tela", "🏠 Painel de Clientes")
 
-    if not cliente:
-        st.markdown('<p class="main-header">🧠 Agente AI - CFP</p>', unsafe_allow_html=True)
-        st.markdown(
-            '<p class="sub-header">Planejamento Financeiro Pessoal com Inteligência Artificial</p>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("""
-        ### Como funciona
-
-        1. **Crie um cliente** na barra lateral
-        2. **Preencha as informações qualitativas** — dados básicos e objetivos
-        3. **Carregue documentos** em cada área especializada
-        4. **Execute os agentes** — cada um analisa sua área com profundidade
-        5. **O Agente Master** consolida tudo em um parecer financeiro integrado
-
-        ### Agentes Especialistas
-        """)
-
-        cols = st.columns(3)
-        for i, (agente_id, agente) in enumerate(AGENTES.items()):
-            with cols[i % 3]:
-                st.markdown(
-                    f"**{agente['icone']} {agente['nome']}**  \n"
-                    f"{agente['descricao']}"
-                )
-        return
-
-    # Tabs do cliente
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📋 Informações Qualitativas",
-        "📄 Documentos",
-        "🤖 Executar Agentes",
-        "📊 Relatórios",
-    ])
-
-    with tab1:
-        aba_info_qualitativa()
-    with tab2:
-        aba_documentos()
-    with tab3:
-        aba_executar()
-    with tab4:
-        aba_relatorios()
+    if tela == "🏠 Painel de Clientes":
+        tela_painel_clientes()
+    else:
+        tela_ficha_cliente()
 
 
 if __name__ == "__main__":

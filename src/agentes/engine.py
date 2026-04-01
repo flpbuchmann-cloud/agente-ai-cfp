@@ -219,20 +219,15 @@ def criar_estrutura_cliente(nome_cliente: str) -> str:
 
 
 def carregar_info_qualitativa(nome_cliente: str) -> dict:
-    """Carrega informações qualitativas do cliente."""
-    caminho = os.path.join(pasta_cliente(nome_cliente), "info_qualitativa.json")
-    if os.path.exists(caminho):
-        with open(caminho, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    """Carrega informações qualitativas do cliente (da base centralizada)."""
+    from src.agentes.db_clientes import obter_cliente
+    return obter_cliente(nome_cliente)
 
 
 def salvar_info_qualitativa(nome_cliente: str, info: dict):
-    """Salva informações qualitativas do cliente."""
-    caminho = os.path.join(pasta_cliente(nome_cliente), "info_qualitativa.json")
-    os.makedirs(os.path.dirname(caminho), exist_ok=True)
-    with open(caminho, "w", encoding="utf-8") as f:
-        json.dump(info, f, ensure_ascii=False, indent=2)
+    """Salva informações qualitativas do cliente (na base centralizada)."""
+    from src.agentes.db_clientes import salvar_cliente
+    salvar_cliente(nome_cliente, info)
 
 
 def formatar_info_qualitativa(info: dict) -> str:
@@ -242,17 +237,28 @@ def formatar_info_qualitativa(info: dict) -> str:
 
     labels = {
         "nome_completo": "Nome Completo",
+        "cpf": "CPF",
+        "data_nascimento": "Data de Nascimento",
         "idade": "Idade",
         "estado_civil": "Estado Civil",
         "regime_de_bens": "Regime de Bens",
+        "conjuge": "Cônjuge/Companheiro(a)",
         "filhos": "Filhos/Dependentes",
         "profissao": "Profissão/Atividade",
+        "empresa_principal": "Empresa Principal",
         "cidade_uf": "Cidade/UF",
-        "objetivos_financeiros": "Objetivos Financeiros",
-        "horizonte_temporal": "Horizonte Temporal",
+        "telefone": "Telefone",
+        "email": "E-mail",
         "perfil_risco": "Perfil de Risco",
+        "horizonte_temporal": "Horizonte Temporal",
+        "patrimonio_estimado": "Patrimônio Estimado",
+        "renda_mensal_estimada": "Renda Mensal Estimada",
+        "objetivos_financeiros": "Objetivos Financeiros",
         "observacoes": "Observações Gerais",
     }
+
+    # Campos internos que não devem ir para o prompt
+    campos_internos = {"criado_em", "atualizado_em"}
 
     linhas = []
     for chave, label in labels.items():
@@ -261,7 +267,7 @@ def formatar_info_qualitativa(info: dict) -> str:
             linhas.append(f"- **{label}**: {valor}")
 
     for chave, valor in info.items():
-        if chave not in labels and valor:
+        if chave not in labels and chave not in campos_internos and valor:
             linhas.append(f"- **{chave}**: {valor}")
 
     return "\n".join(linhas) if linhas else "[NENHUMA INFORMAÇÃO QUALITATIVA DISPONÍVEL]"
