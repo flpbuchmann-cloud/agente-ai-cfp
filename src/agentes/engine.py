@@ -277,6 +277,22 @@ def listar_clientes() -> list[str]:
     ])
 
 
+def excluir_cliente(nome_cliente: str):
+    """Remove toda a pasta e dados de um cliente."""
+    import shutil
+    pasta = pasta_cliente(nome_cliente)
+    if os.path.isdir(pasta):
+        shutil.rmtree(pasta)
+
+
+def renomear_cliente(nome_atual: str, nome_novo: str):
+    """Renomeia a pasta de um cliente."""
+    pasta_atual = pasta_cliente(nome_atual)
+    pasta_nova = pasta_cliente(nome_novo)
+    if os.path.isdir(pasta_atual) and not os.path.exists(pasta_nova):
+        os.rename(pasta_atual, pasta_nova)
+
+
 def listar_documentos_agente(nome_cliente: str, agente_id: str) -> list[str]:
     """Lista documentos na pasta de um agente para um cliente."""
     pasta = pasta_agente(nome_cliente, agente_id)

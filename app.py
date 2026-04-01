@@ -32,6 +32,8 @@ from src.agentes.engine import (
     executar_master,
     executar_pipeline_completo,
     pasta_cliente,
+    excluir_cliente,
+    renomear_cliente,
     PROVEDORES,
 )
 
@@ -152,7 +154,7 @@ def sidebar():
             st.session_state["cliente_ativo"] = None
 
         # Novo cliente
-        with st.expander("Novo Cliente", expanded=not clientes):
+        with st.expander("➕ Novo Cliente", expanded=not clientes):
             novo_nome = st.text_input("Nome do cliente", key="novo_cliente_nome")
             if st.button("Criar", key="btn_criar_cliente"):
                 if novo_nome.strip():
@@ -162,6 +164,51 @@ def sidebar():
                     st.rerun()
                 else:
                     st.warning("Informe o nome do cliente.")
+
+        # Gerenciar cliente (renomear / excluir)
+        if clientes and st.session_state.get("cliente_ativo"):
+            with st.expander("✏️ Gerenciar Cliente"):
+                cliente_ativo = st.session_state["cliente_ativo"]
+
+                # Renomear
+                novo_nome_ren = st.text_input(
+                    "Renomear para:",
+                    value=cliente_ativo,
+                    key="renomear_nome",
+                )
+                if st.button("Renomear", key="btn_renomear"):
+                    novo = novo_nome_ren.strip()
+                    if novo and novo != cliente_ativo:
+                        if novo in clientes:
+                            st.error(f"Já existe um cliente '{novo}'.")
+                        else:
+                            renomear_cliente(cliente_ativo, novo)
+                            st.session_state["cliente_ativo"] = novo
+                            st.success(f"Renomeado para '{novo}'!")
+                            st.rerun()
+                    else:
+                        st.warning("Informe um nome diferente do atual.")
+
+                st.markdown("---")
+
+                # Excluir
+                st.markdown("**Excluir cliente**")
+                st.caption(
+                    f"Isso removerá permanentemente todos os dados, "
+                    f"documentos e relatórios de **{cliente_ativo}**."
+                )
+                confirma = st.text_input(
+                    f'Digite "{cliente_ativo}" para confirmar:',
+                    key="confirma_exclusao",
+                )
+                if st.button("🗑️ Excluir", key="btn_excluir", type="primary"):
+                    if confirma == cliente_ativo:
+                        excluir_cliente(cliente_ativo)
+                        st.session_state["cliente_ativo"] = None
+                        st.success(f"Cliente '{cliente_ativo}' excluído.")
+                        st.rerun()
+                    else:
+                        st.error("Nome não confere. Exclusão cancelada.")
 
         st.markdown("---")
 
