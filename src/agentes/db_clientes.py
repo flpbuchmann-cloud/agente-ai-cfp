@@ -101,6 +101,19 @@ def salvar_cliente(client_id: str, dados: dict):
     db[client_id] = dados
     _salvar_db(db)
 
+    # Garantir que a pasta do cliente existe
+    _garantir_pastas_cliente(client_id)
+
+
+def _garantir_pastas_cliente(client_id: str):
+    """Cria a estrutura de pastas do cliente se não existir."""
+    from src.prompts.agentes import AGENTES
+    base = os.path.join(get_pasta_clientes(), client_id)
+    os.makedirs(base, exist_ok=True)
+    for agente_id in AGENTES:
+        os.makedirs(os.path.join(base, "documentos", agente_id), exist_ok=True)
+    os.makedirs(os.path.join(base, "relatorios"), exist_ok=True)
+
 
 def criar_cliente(nome: str) -> str:
     """
@@ -123,6 +136,7 @@ def criar_cliente(nome: str) -> str:
 
     db[client_id] = dados
     _salvar_db(db)
+    _garantir_pastas_cliente(client_id)
     return client_id
 
 
