@@ -160,12 +160,73 @@ def sidebar():
 # ---------------------------------------------------------------------------
 # TELA 1: Painel de Clientes
 # ---------------------------------------------------------------------------
+def _alertas_aniversario():
+    """Mostra alertas de aniversário de clientes (hoje e próximos 7 dias)."""
+    from datetime import datetime, date
+
+    clientes = db_listar_clientes()
+    hoje = date.today()
+    aniversarios_hoje = []
+    aniversarios_proximos = []
+
+    for c in clientes:
+        dados = obter_cliente(c["id"])
+        nasc_str = dados.get("data_nascimento", "").strip()
+        if not nasc_str:
+            continue
+
+        # Aceitar DD/MM/AAAA ou AAAA-MM-DD
+        dt_nasc = None
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                dt_nasc = datetime.strptime(nasc_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        if not dt_nasc:
+            continue
+
+        # Aniversário este ano
+        try:
+            aniv_este_ano = dt_nasc.replace(year=hoje.year)
+        except ValueError:
+            # 29 de fevereiro em ano não bissexto
+            aniv_este_ano = dt_nasc.replace(year=hoje.year, day=28)
+
+        dias_ate = (aniv_este_ano - hoje).days
+        idade_nova = hoje.year - dt_nasc.year
+        if aniv_este_ano > hoje:
+            idade_nova -= 1  # ainda não fez aniversário
+
+        nome = dados.get("nome_completo", c["id"])
+
+        if dias_ate == 0:
+            aniversarios_hoje.append((nome, idade_nova + 1))
+        elif 1 <= dias_ate <= 7:
+            aniversarios_proximos.append((nome, idade_nova + 1, dias_ate, aniv_este_ano))
+
+    if aniversarios_hoje:
+        for nome, idade in aniversarios_hoje:
+            st.toast(f"🎂 {nome} faz {idade} anos hoje!", icon="🎂")
+            st.success(f"🎂 **Aniversário hoje!** {nome} está completando **{idade} anos**!")
+
+    if aniversarios_proximos:
+        linhas = []
+        for nome, idade, dias, dt in aniversarios_proximos:
+            data_fmt = dt.strftime("%d/%m")
+            linhas.append(f"- **{nome}** faz **{idade} anos** em {data_fmt} (daqui a {dias} dia{'s' if dias > 1 else ''})")
+        st.info("🎈 **Aniversários nos próximos 7 dias:**\n\n" + "\n".join(linhas))
+
+
 def tela_painel_clientes():
     st.markdown('<p class="main-header">🧠 Agente AI - CFP</p>', unsafe_allow_html=True)
     st.markdown(
         '<p class="sub-header">Planejamento Financeiro Pessoal com Inteligência Artificial</p>',
         unsafe_allow_html=True,
     )
+
+    # Alertas de aniversário
+    _alertas_aniversario()
 
     # Novo cliente
     st.markdown("### ➕ Novo Cliente")
