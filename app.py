@@ -32,6 +32,7 @@ from src.agentes.engine import (
     executar_master,
     executar_pipeline_completo,
     pasta_cliente,
+    PROVEDORES,
 )
 
 # ---------------------------------------------------------------------------
@@ -92,15 +93,46 @@ def sidebar():
 
         st.markdown("---")
 
-        # API Key
-        api_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            value=os.environ.get("ANTHROPIC_API_KEY", ""),
-            help="Necessária para executar os agentes",
+        # Provedor de IA
+        st.markdown("### 🔑 Provedor de IA")
+        provedor = st.selectbox(
+            "Provedor",
+            list(PROVEDORES.keys()),
+            format_func=lambda x: PROVEDORES[x]["nome"],
+            key="sel_provedor",
         )
-        if api_key:
-            os.environ["ANTHROPIC_API_KEY"] = api_key
+        st.session_state["provedor"] = provedor
+
+        # API Keys
+        if provedor == "claude":
+            api_key = st.text_input(
+                "Anthropic API Key",
+                type="password",
+                value=os.environ.get("ANTHROPIC_API_KEY", ""),
+                help="Necessária para usar Claude",
+            )
+            if api_key:
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+        else:
+            api_key = st.text_input(
+                "Google Gemini API Key",
+                type="password",
+                value=os.environ.get("GEMINI_API_KEY", ""),
+                help="Necessária para usar Gemini",
+            )
+            if api_key:
+                os.environ["GEMINI_API_KEY"] = api_key
+
+            # Gem personalizado
+            gem_id = st.text_input(
+                "Gem ID (opcional)",
+                value=st.session_state.get("gem_id", ""),
+                help="ID de um Gem personalizado do Gemini. "
+                     "Ex: tunedModels/meu-gem-abc123. "
+                     "Deixe vazio para usar o modelo padrão.",
+                placeholder="tunedModels/...",
+            )
+            st.session_state["gem_id"] = gem_id if gem_id.strip() else None
 
         st.markdown("---")
 
@@ -135,15 +167,13 @@ def sidebar():
 
         # Modelo
         st.markdown("### ⚙️ Configurações")
+        provedor_atual = st.session_state.get("provedor", "claude")
+        modelos_disponiveis = PROVEDORES[provedor_atual]["modelos"]
         modelo = st.selectbox(
-            "Modelo Claude",
-            [
-                "claude-sonnet-4-20250514",
-                "claude-haiku-4-5-20251001",
-                "claude-opus-4-20250514",
-            ],
+            "Modelo",
+            modelos_disponiveis,
             index=0,
-            help="Sonnet = melhor custo-benefício. Opus = mais profundo.",
+            help="Selecione o modelo do provedor escolhido.",
         )
         st.session_state["modelo"] = modelo
 
@@ -351,16 +381,25 @@ def aba_executar():
         return
 
     modelo = st.session_state.get("modelo", "claude-sonnet-4-20250514")
+    provedor = st.session_state.get("provedor", "claude")
+    gem_id = st.session_state.get("gem_id")
 
     st.markdown("### 🤖 Executar Agentes")
+
+    # Mostrar provedor ativo
+    provedor_nome = PROVEDORES[provedor]["nome"]
+    gem_label = f" | Gem: `{gem_id}`" if gem_id else ""
+    st.info(f"**Provedor:** {provedor_nome} | **Modelo:** `{modelo}`{gem_label}")
+
     st.caption(
         "Execute agentes individualmente ou o pipeline completo. "
         "O Agente Master consolida as análises de todos os especialistas."
     )
 
     # Verificar API key
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        st.error("Configure a API Key do Anthropic na barra lateral.")
+    env_var = "ANTHROPIC_API_KEY" if provedor == "claude" else "GEMINI_API_KEY"
+    if not os.environ.get(env_var):
+        st.error(f"Configure a API Key ({env_var}) na barra lateral.")
         return
 
     # Status dos documentos por agente
@@ -397,7 +436,7 @@ def aba_executar():
             with st.spinner(f"Executando {AGENTES[agente_sel]['nome']}..."):
                 try:
                     relatorio = executar_agente_especialista(
-                        cliente, agente_sel, modelo
+                        cliente, agente_sel, provedor, modelo, gem_id
                     )
                     st.session_state[f"relatorio_{agente_sel}"] = relatorio
                     st.success(f"{AGENTES[agente_sel]['nome']} concluído!")
@@ -447,7 +486,7 @@ def aba_executar():
 
             try:
                 relatorio = executar_agente_especialista(
-                    cliente, agente_id, modelo
+                    cliente, agente_id, provedor, modelo, gem_id
                 )
                 relatorios[agente_id] = relatorio
                 st.session_state[f"relatorio_{agente_id}"] = relatorio
@@ -460,7 +499,7 @@ def aba_executar():
         progress_bar.progress((total_steps - 1) / total_steps)
 
         try:
-            parecer = executar_master(cliente, relatorios, modelo)
+            parecer = executar_master(cliente, relatorios, provedor, modelo, gem_id)
             st.session_state["parecer_master"] = parecer
         except Exception as e:
             st.error(f"Erro no Master: {e}")

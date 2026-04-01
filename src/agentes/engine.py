@@ -2,15 +2,13 @@
 Engine de orquestração dos agentes.
 
 Coordena a execução dos agentes especialistas e do agente master,
-gerenciando documentos, prompts e chamadas à API Claude.
+gerenciando documentos, prompts e chamadas às APIs Claude e Gemini.
 """
 
 import os
 import json
 import time
 from pathlib import Path
-
-import anthropic
 
 from src.prompts.agentes import AGENTES, PROMPT_MASTER
 from src.agentes.leitor_documentos import (
@@ -22,23 +20,162 @@ from src.agentes.leitor_documentos import (
 # Diretório base de dados dos clientes
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "clientes")
 
+# ---------------------------------------------------------------------------
+# Provedores de IA
+# ---------------------------------------------------------------------------
 
-def _get_client() -> anthropic.Anthropic:
-    """Retorna cliente da API Anthropic."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+PROVEDORES = {
+    "claude": {
+        "nome": "Claude (Anthropic)",
+        "modelos": [
+            "claude-sonnet-4-20250514",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-20250514",
+        ],
+    },
+    "gemini": {
+        "nome": "Gemini (Google)",
+        "modelos": [
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+        ],
+    },
+}
+
+
+def _get_api_key(provedor: str) -> str:
+    """Busca API key do provedor (env > streamlit secrets)."""
+    env_var = "ANTHROPIC_API_KEY" if provedor == "claude" else "GEMINI_API_KEY"
+    api_key = os.environ.get(env_var, "")
     if not api_key:
         try:
             import streamlit as st
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            api_key = st.secrets.get(env_var, "")
         except Exception:
             pass
-    if not api_key:
-        raise ValueError(
-            "ANTHROPIC_API_KEY não configurada. "
-            "Defina a variável de ambiente ou insira no app."
-        )
-    return anthropic.Anthropic(api_key=api_key)
+    return api_key
 
+
+def _chamar_claude(prompt: str, content_parts: list, modelo: str, max_tokens: int) -> str:
+    """Executa chamada à API Claude."""
+    import anthropic
+
+    api_key = _get_api_key("claude")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY não configurada.")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # Montar content: imagens + texto
+    parts = list(content_parts)  # imagens já estão aqui
+    parts.append({"type": "text", "text": prompt})
+
+    response = client.messages.create(
+        model=modelo,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": parts}],
+    )
+    return response.content[0].text
+
+
+def _chamar_gemini(
+    prompt: str,
+    content_parts: list,
+    modelo: str,
+    max_tokens: int,
+    gem_id: str | None = None,
+) -> str:
+    """
+    Executa chamada à API Gemini.
+
+    Args:
+        prompt: texto do prompt
+        content_parts: lista de imagens (dicts base64)
+        modelo: ID do modelo Gemini
+        max_tokens: máximo de tokens na resposta
+        gem_id: ID de um Gem personalizado (opcional)
+    """
+    import google.generativeai as genai
+
+    api_key = _get_api_key("gemini")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY não configurada.")
+
+    genai.configure(api_key=api_key)
+
+    # Configuração de geração
+    generation_config = genai.types.GenerationConfig(
+        max_output_tokens=max_tokens,
+        temperature=0.7,
+    )
+
+    # Se tem Gem, usar como system instruction via model tunado
+    if gem_id:
+        model = genai.GenerativeModel(
+            model_name=gem_id,
+            generation_config=generation_config,
+        )
+    else:
+        model = genai.GenerativeModel(
+            model_name=modelo,
+            generation_config=generation_config,
+        )
+
+    # Montar conteúdo multimodal
+    parts = []
+
+    # Adicionar imagens
+    for cp in content_parts:
+        if cp.get("type") == "image":
+            import base64
+            img_data = base64.b64decode(cp["source"]["data"])
+            mime = cp["source"]["media_type"]
+            parts.append({"mime_type": mime, "data": img_data})
+
+    # Adicionar texto
+    parts.append(prompt)
+
+    response = model.generate_content(parts)
+    return response.text
+
+
+def chamar_ia(
+    prompt: str,
+    content_parts: list | None = None,
+    provedor: str = "claude",
+    modelo: str = "claude-sonnet-4-20250514",
+    max_tokens: int = 8192,
+    gem_id: str | None = None,
+) -> str:
+    """
+    Chamada unificada para qualquer provedor de IA.
+
+    Args:
+        prompt: texto do prompt
+        content_parts: lista de conteúdo multimodal (imagens)
+        provedor: "claude" ou "gemini"
+        modelo: ID do modelo
+        max_tokens: máximo de tokens na resposta
+        gem_id: ID de um Gem do Gemini (opcional)
+
+    Returns:
+        Texto da resposta
+    """
+    if content_parts is None:
+        content_parts = []
+
+    if provedor == "claude":
+        return _chamar_claude(prompt, content_parts, modelo, max_tokens)
+    elif provedor == "gemini":
+        return _chamar_gemini(prompt, content_parts, modelo, max_tokens, gem_id)
+    else:
+        raise ValueError(f"Provedor desconhecido: {provedor}")
+
+
+# ---------------------------------------------------------------------------
+# Gestão de clientes e documentos
+# ---------------------------------------------------------------------------
 
 def pasta_cliente(nome_cliente: str) -> str:
     """Retorna o caminho da pasta do cliente."""
@@ -55,14 +192,11 @@ def criar_estrutura_cliente(nome_cliente: str) -> str:
     base = pasta_cliente(nome_cliente)
     os.makedirs(base, exist_ok=True)
 
-    # Pasta de documentos por agente
     for agente_id in AGENTES:
         os.makedirs(os.path.join(base, "documentos", agente_id), exist_ok=True)
 
-    # Pasta de relatórios
     os.makedirs(os.path.join(base, "relatorios"), exist_ok=True)
 
-    # Arquivo de info qualitativa
     info_path = os.path.join(base, "info_qualitativa.json")
     if not os.path.exists(info_path):
         info_padrao = {
@@ -126,7 +260,6 @@ def formatar_info_qualitativa(info: dict) -> str:
         if valor:
             linhas.append(f"- **{label}**: {valor}")
 
-    # Campos extras (adicionados pelo usuário)
     for chave, valor in info.items():
         if chave not in labels and valor:
             linhas.append(f"- **{chave}**: {valor}")
@@ -185,63 +318,49 @@ def importar_de_pasta(nome_cliente: str, agente_id: str, pasta_origem: str) -> l
     return importados
 
 
+# ---------------------------------------------------------------------------
+# Execução dos agentes
+# ---------------------------------------------------------------------------
+
 def executar_agente_especialista(
     nome_cliente: str,
     agente_id: str,
+    provedor: str = "claude",
     modelo: str = "claude-sonnet-4-20250514",
+    gem_id: str | None = None,
     callback=None,
 ) -> str:
-    """
-    Executa um agente especialista.
-
-    Args:
-        nome_cliente: nome do cliente
-        agente_id: ID do agente (chave do dict AGENTES)
-        modelo: modelo Claude a usar
-        callback: função callback(status_msg) para updates de progresso
-
-    Returns:
-        Relatório gerado pelo agente
-    """
+    """Executa um agente especialista."""
     agente = AGENTES[agente_id]
     if callback:
         callback(f"Lendo documentos de {agente['nome']}...")
 
-    # Carregar info qualitativa
     info = carregar_info_qualitativa(nome_cliente)
     info_formatada = formatar_info_qualitativa(info)
 
-    # Carregar documentos da pasta do agente
     pasta = pasta_agente(nome_cliente, agente_id)
     documentos = ler_pasta(pasta)
     docs_formatados = formatar_documentos_para_prompt(documentos)
 
-    # Montar prompt
     prompt = agente["prompt"].format(
         info_qualitativa=info_formatada,
         documentos=docs_formatados,
     )
 
-    # Separar imagens dos documentos para envio multimodal
-    content_parts = []
-    for doc in documentos:
-        if doc.get("imagem"):
-            content_parts.append(doc["imagem"])
-
-    content_parts.append({"type": "text", "text": prompt})
+    # Separar imagens para envio multimodal
+    content_parts = [doc["imagem"] for doc in documentos if doc.get("imagem")]
 
     if callback:
         callback(f"Executando {agente['nome']}...")
 
-    # Chamar API Claude
-    client = _get_client()
-    response = client.messages.create(
-        model=modelo,
+    relatorio = chamar_ia(
+        prompt=prompt,
+        content_parts=content_parts,
+        provedor=provedor,
+        modelo=modelo,
         max_tokens=8192,
-        messages=[{"role": "user", "content": content_parts}],
+        gem_id=gem_id,
     )
-
-    relatorio = response.content[0].text
 
     # Salvar relatório
     relatorios_dir = os.path.join(pasta_cliente(nome_cliente), "relatorios")
@@ -259,28 +378,18 @@ def executar_agente_especialista(
 def executar_master(
     nome_cliente: str,
     relatorios: dict[str, str],
+    provedor: str = "claude",
     modelo: str = "claude-sonnet-4-20250514",
+    gem_id: str | None = None,
     callback=None,
 ) -> str:
-    """
-    Executa o agente master com os relatórios dos especialistas.
-
-    Args:
-        nome_cliente: nome do cliente
-        relatorios: dict {agente_id: relatório}
-        modelo: modelo Claude a usar
-        callback: função callback
-
-    Returns:
-        Parecer integrado do master
-    """
+    """Executa o agente master com os relatórios dos especialistas."""
     if callback:
         callback("Agente Master analisando relatórios...")
 
     info = carregar_info_qualitativa(nome_cliente)
     info_formatada = formatar_info_qualitativa(info)
 
-    # Formatar relatórios dos especialistas
     partes_relatorios = []
     for agente_id, relatorio in relatorios.items():
         agente = AGENTES.get(agente_id, {})
@@ -294,14 +403,13 @@ def executar_master(
         relatorios_especialistas=relatorios_formatados,
     )
 
-    client = _get_client()
-    response = client.messages.create(
-        model=modelo,
+    parecer = chamar_ia(
+        prompt=prompt,
+        provedor=provedor,
+        modelo=modelo,
         max_tokens=16384,
-        messages=[{"role": "user", "content": prompt}],
+        gem_id=gem_id,
     )
-
-    parecer = response.content[0].text
 
     # Salvar parecer
     relatorios_dir = os.path.join(pasta_cliente(nome_cliente), "relatorios")
@@ -319,24 +427,12 @@ def executar_master(
 def executar_pipeline_completo(
     nome_cliente: str,
     agentes_selecionados: list[str] | None = None,
+    provedor: str = "claude",
     modelo: str = "claude-sonnet-4-20250514",
+    gem_id: str | None = None,
     callback=None,
 ) -> dict:
-    """
-    Executa o pipeline completo: todos os agentes especialistas + master.
-
-    Args:
-        nome_cliente: nome do cliente
-        agentes_selecionados: lista de agente_ids (None = todos)
-        modelo: modelo Claude
-        callback: função callback(status_msg)
-
-    Returns:
-        {
-            "especialistas": {agente_id: relatório},
-            "master": parecer_integrado,
-        }
-    """
+    """Executa o pipeline completo: todos os agentes especialistas + master."""
     if agentes_selecionados is None:
         agentes_selecionados = list(AGENTES.keys())
 
@@ -348,19 +444,19 @@ def executar_pipeline_completo(
             callback(f"[{i+1}/{total}] Executando {AGENTES[agente_id]['nome']}...")
 
         relatorio = executar_agente_especialista(
-            nome_cliente, agente_id, modelo, callback
+            nome_cliente, agente_id, provedor, modelo, gem_id, callback
         )
         relatorios[agente_id] = relatorio
 
-        # Pausa entre chamadas para respeitar rate limits
         if i < total - 1:
             time.sleep(1)
 
-    # Executar master
     if callback:
-        callback(f"[Master] Consolidando análises...")
+        callback("[Master] Consolidando análises...")
 
-    parecer = executar_master(nome_cliente, relatorios, modelo, callback)
+    parecer = executar_master(
+        nome_cliente, relatorios, provedor, modelo, gem_id, callback
+    )
 
     return {
         "especialistas": relatorios,
